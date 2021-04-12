@@ -1,0 +1,489 @@
+/* This homework assignment is an extension of homework #3, with an implementation of 
+   Prim's algorithm to find a minimum spanning tree.
+   
+   The resulting edges and total weight are printed. Node 0 is selected as the starting point of the algorithm
+   (it was not specified in the problem statement).
+
+   A further extension would be to handle various command line options, including selection of 
+   the starting node, or various runtime parameters. 
+
+   It takes the name of the file to be read in from the command line.
+   The rest of this introductory comment was written for homework #3.
+
+   e.g. if compiled with: 
+   g++ -g -o W4.exe -std=c++20 W4_prim.cpp -Wfatal-errors
+   
+   and run with:
+   $>./W4.exe cplusplus4c_homeworks_Homework3_SampleTestData_mst_data.txt
+
+   The output produced is:
+   ./W4.exe cplusplus4c_homeworks_Homework3_SampleTestData_mst_data.txt
+   Line Count:345
+   {0,2}, total weight:2
+   {2,9}, total weight:3
+   {9,8}, total weight:6
+   {8,4}, total weight:7
+   {4,7}, total weight:8
+   {4,15}, total weight:10
+   {7,10}, total weight:12
+   {15,19}, total weight:14
+   {9,12}, total weight:17
+   {12,3}, total weight:18
+   {12,11}, total weight:19
+   {11,14}, total weight:20
+   {12,17}, total weight:21
+   {14,18}, total weight:22
+   {17,1}, total weight:23
+   {1,6}, total weight:24
+   {6,5}, total weight:25
+   {5,16}, total weight:27
+   {9,13}, total weight:30
+
+   MST Weight: 30
+
+   -- Below this line is the comment included in HW3:   
+   
+   This is my first attempt at any graph theory, as well as using STL containers.
+   I learned a tremendous number of things - idioms for using STL containers and iterators,
+   how to write a basic abstract data type to handle a problem, how the density
+   of a graph past a certain point will lead to a kind of 'plateau' in the average
+   path length, how to verify certain graph problems using external tools, how to 
+   encode pseudocode into STL containers, how to leverage Monte Carlo methods we've discussed
+   and how to create uniform random distributions in C++ (I also utilized the older rand() style
+   as well). I also aimed for const-correctness, but the program could be improved in that 
+   respect. 
+   
+   As far as the implementation goes, you can tell comparing my graph implementation to the
+   reference implementation that it's relatively primitive - I used an edge list style implementation.
+   It turns out that the reference implementation notes were way more sophisticated and general 
+   than what was minimally needed. 
+
+   I didn't need an entirely separate class for the workflow manager (just a helper function).
+   Similarly, I didn't use a separate class for ShortestPath (just a funtion), and my Dijkstra implementation
+   didn't use a priority queue. However I did utilize std::set (for tracking indices), and 
+   my edge list implementation is of form std::map<int,std::map<int,double>>. The first
+   index is a node, the second index are all of its neighbors, and used in conjuntion 
+   it returns the weight of that edge - so nodes[0] gives you the neighbors of node 0,
+   nodes[0][1] gives you the weight of the edge between node 0 and 1.
+
+   One of the most difficult things was picking how to implement the nodes and their connections.
+   I went through several of them before settling on the std::map<int,std::map<int,double>>.
+*/
+
+   
+
+
+#include <iostream>
+#include <iterator>
+#include <set>
+#include <stdlib.h>
+#include <time.h>
+#include <map>
+#include <list>
+#include <random>
+#include <limits>
+#include <tuple>
+#include <fstream>
+#include <string>
+#include <sstream>
+
+// Helper function - generate a random probability between 1-100
+inline double prob(void)
+{
+
+  return static_cast<double>((rand()%100+1)*.01);
+}
+typedef std::tuple<int,int,double> edge;
+typedef std::list<edge> tuple_list;
+
+bool edge_compare_lt(const edge& a, const edge& b)
+{
+  if (std::get<2>(a) < std::get<2>(b))
+    return true;
+  else
+    return false;
+};
+
+class graph
+{
+public:
+  graph(void);
+  ~graph(void);
+  graph(int size,
+	double edge_density,
+	double distance_min,
+	double distance_max);
+  graph(const std::string& graph_file);
+  void add_connection(int nodea,  int nodeb,  double weight);
+  inline int V(void){return nodes.size();}
+  std::map<int,std::map<int,double>> nodes;
+  void dijkstra(int source, std::map<int,double>& dist,std::map<int,double>& prev);
+  int find_virtex_with_min_distance(std::set<int> Q, std::map<int,double> dist);
+  std::set<int> find_neighbor_v_of_u(int u, std::set<int> Q);
+  std::set<int> find_neighbors_of_u_not_in_Q(int u, std::set<int> Q);
+  std::set<int> get_neighbors(int anode);
+  edge find_minimum_edge(const std::set<int>& closed, const std::set<int>& open);
+  void prim(int node);
+  double length(int u,int v);
+  tuple_list* get_edges(const int & anode);
+  
+private:
+  std::default_random_engine generator;
+  std::uniform_real_distribution<double> distribution;
+};
+
+edge graph::find_minimum_edge(const std::set<int>& closed, const std::set<int>& open)
+{
+  auto min_weight = std::numeric_limits<double>::infinity();
+  edge resedge;
+  for(auto const & i : closed)
+    {
+      for(auto const& [anode,weight] : nodes[i])
+	{
+	  if (open.find(anode) != open.end() && weight < min_weight)
+	    {
+	      resedge = std::make_tuple(i,anode,weight);
+	      min_weight = weight;
+	    }
+	}
+    }
+  return resedge;
+};
+
+tuple_list* graph::get_edges(const int & anode)
+  {
+  tuple_list* edge_list = new tuple_list();
+  for(auto const & [end_node,weight] : nodes[anode])
+    {
+      edge_list->push_front(std::make_tuple(anode,end_node,weight));
+      //std::cout << edge_list->size() ;
+    }
+  return edge_list;
+};
+
+void graph::prim(int node)
+{
+  std::set<int> closed;
+  std::set<int> open;
+  double mst_weight = 0.0;
+
+  int v;
+  // initialize open/closed
+  closed.insert(node);
+  for(auto const& i : get_neighbors(node))
+    {
+      open.insert(i);
+    }
+
+  while(!open.empty())
+    {
+      auto min_weight = std::numeric_limits<double>::infinity();
+      int tnode;
+      edge fme = find_minimum_edge(closed,open);
+      open.erase(std::get<1>(fme));
+      closed.insert(std::get<1>(fme));
+      mst_weight += std::get<2>(fme);
+      for(auto const & [aneighbor,weight] : nodes[std::get<1>(fme)])
+	{
+	  if (closed.find(aneighbor) == closed.end())
+	    open.insert(aneighbor);
+	}
+      std::cout<<"{"<<std::get<0>(fme)<<","<<std::get<1>(fme)<<"}, total weight:"<<mst_weight<<std::endl;
+    } // while (!open.empty())
+  std::cout<<std::endl;
+  std::cout << "MST Weight: " << mst_weight << std::endl;
+  
+};
+
+std::set<int> graph::get_neighbors(int anode)
+{
+  std::set<int> result;
+  for(auto const& [neighbor,weight] : nodes[anode])
+    {
+      result.insert(neighbor);
+    }
+  return result;
+};
+
+// Find the neighbors of some node that are expressly not in the given set
+std::set<int> graph::find_neighbors_of_u_not_in_Q(int u, std::set<int> Q)
+{
+  std::set<int> result;
+  // add all neighbors of u to result
+  for(auto const& [key,value] : nodes[u])
+    {
+      result.insert(key);
+    }
+  // now remove all items that are in Q
+  for(auto const& item : Q)
+    {
+      result.erase(item);
+    }
+  return result;
+}
+
+// Returns the distance (or weight) between u and v
+inline double graph::length(int u, int v)
+{
+  return nodes[u][v];
+}
+
+// Debug helper function - prints out the number of neighors of a node
+static void dbg_find_num_neighbors(graph* agraph, int node)
+{
+  std::cout<<"Node Number: "<<node<<" has " << agraph->nodes[node].size() << " neighbors."<<std::endl;
+  std::map<int,std::map<int,double>>::iterator it;
+  std::map<int,double>::iterator ib;
+  for(it = agraph->nodes.begin();it != agraph->nodes.end();++it)
+    {
+      std::cout << "Node: " << it->first << std::endl;
+      for(ib=it->second.begin();ib != it->second.end();++ib)
+	{
+	  std::cout << " connected: " << ib->first << std::endl;
+	}
+    }
+};
+
+// Returns a set which contains all neighbors of u
+// which are also in Q (i.e. still potential virtices to explore
+std::set<int> graph::find_neighbor_v_of_u(int u, std::set<int> Q)
+{
+  std::set<int> result;
+  std::map<int,double> inner = nodes[u];
+  std::map<int,double>::iterator it;
+  for(it = inner.begin();it != inner.end(); ++ it)
+    {
+      //  std::cout<<"connected to: " << it->first << std::endl;
+      if(Q.find(it->first) != Q.end())
+	{
+	  result.insert(it->first);
+	}
+    }
+  return result;
+};
+
+// Of the nodes in Q with distances in dist, return the node with the shortest (smallest) distance(/weight)
+int graph::find_virtex_with_min_distance(std::set<int> Q, std::map<int,double> dist)
+{
+  double value=std::numeric_limits<double>::infinity();
+  int index=0;
+
+  for (std::set<int>::iterator it=Q.begin();it!=Q.end();++it)
+    {
+      if (dist[*it]<value)
+	{
+	  index = *it;
+	  value=dist[*it];
+	}
+    }
+  return index;
+};
+
+// This function returns (via reference, through the 'dist' paramter) the distance
+// between all nodes and the 'source' node.
+// This implementation is based on the peusdo-code version available on Wikipedia:
+// Reference: https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm#Pseudocode
+void graph::dijkstra(int source, std::map<int,double>& dist,std::map<int,double>& prev)
+{
+  // Set all nodes as unvisited
+  std::set<int> Q;
+  int u;
+  std::set<int> v;
+  double alt;
+
+  // Initialize Q, dist, prev
+  for(int i=0;i<nodes.size();++i)
+    {
+      Q.insert(i);
+      dist[i]=std::numeric_limits<double>::infinity();
+      prev[i]=std::numeric_limits<double>::infinity(); // Undefined
+    }
+  dist[source]=0.0;
+  
+  u = source;
+
+  // Pseudocode Line 11
+  while(!Q.empty())
+    {
+      u = find_virtex_with_min_distance(Q, dist);
+      Q.erase(u);
+      
+      v= find_neighbor_v_of_u(u, Q); // Which is in Q
+      
+      if (v.empty()) // NOTE: This is to prevent an infinite loop in the case of a disconnected graph.
+	break;       // This result was discovered during testing; otherwise there's no impact.
+      
+      // the iterator 'it' is the pseudocode of 'each v' below
+      for(std::set<int>::iterator it=v.begin();it!=v.end();++it)
+	{
+	  alt = dist[u] + length(u,*it);
+	  //std::cout << "alt: " << alt << std::endl;
+	  if( alt < dist[*it])
+	    {
+	      dist[*it] = alt;
+	      prev[*it] = u;
+	    }
+	}
+    } 
+};
+
+// Default constructor.
+graph::graph(void)
+{
+};
+
+// Generate a graph
+graph::graph(int size,
+      double edge_density,
+      double distance_min,
+      double distance_max)
+{
+  distribution = std::uniform_real_distribution<double>(distance_min, distance_max);
+  for(int i=0;i<size-1;++i)
+    {
+      for(int j=i+1;j<size;++j)
+	{
+	  if(prob()<edge_density)
+	    {
+	      double aweight = std::round(distribution(generator) * 1000.0)/1000.0; // Only want 3 decimal places of weight
+	      add_connection(i,j,aweight);
+	      add_connection(j,i,aweight);
+	    }
+	}
+    }
+};
+
+// Constructor, read graph data from file
+graph::graph(const std::string& graph_file)
+{
+  std::ifstream infile(graph_file);
+  int num_nodes = -1;
+  int line_count = 0;
+  int nodea;
+  int nodeb;
+  double weight;
+  for (std::string line; std::getline(infile, line); line_count++) 
+    {
+      std::istringstream ss(line);
+      if(line_count==0)
+	{
+	  ss >> num_nodes ;
+	}
+      else
+	{
+	  ss >> nodea >> nodeb >> weight;
+	  // std::cout << "Node a:" << nodea << " Node b:" << nodeb << " Weight:" << weight << std::endl;
+	  this->add_connection(nodea,nodeb,weight);
+	}
+
+    }
+  std::cout << "Line Count:"<<line_count<<std::endl;
+};
+
+
+// Default destructor
+graph::~graph(void)
+{
+};
+
+// Add undirected edge between two nodes.
+// Note: Edge list representation
+void graph::add_connection( int nodea,  int nodeb,  double weight)
+{
+  nodes[nodea][nodeb] = weight;
+  nodes[nodeb][nodea] = weight;
+};
+
+// Print the graph. For debug.
+void dbg_print_graph(const graph& agraph)
+{
+  for(auto const& [key,value] : agraph.nodes)
+    {
+      std::cout << "node:"<<key<<std::endl;
+      for(auto const& [value1,value2] : value)
+	{
+	  std::cout << "neighbor:"<<value1<<" weight:"<<value2<<std::endl;
+	}
+    }
+}
+
+// This function prints the graph in such a way that the edges and weights can be easily copied into
+// Mathematica for verification of the values.
+void print_graph(const graph& agraph)
+{
+  std::map<int,std::map<int,double>>::iterator it;
+  std::map<int,std::map<int,double>> tnodes = agraph.nodes;
+  std::map<int,double> temp;
+  std::map<int,double>::iterator ib;
+  std::string s_edges;
+  std::string s_weights;
+  for(it = tnodes.begin();it!=tnodes.end();++it)
+    {
+      temp = it->second;
+      for(ib = temp.begin();ib!=temp.end();++ib){
+	s_edges += std::to_string(it->first) + " \\[UndirectedEdge] "+std::to_string(ib->first)+", ";
+	s_weights+= std::to_string(ib->second) +  ", ";
+      }    
+    }
+  s_edges += "\n";
+  s_weights += "\n";
+  std::cout << "Edges:"<<std::endl
+	    << s_edges;
+  std::cout << "Weights:"<<std::endl
+            << s_weights;
+};
+
+// average path length as a helper function
+double average_path_length(std::map<int,double> dist)
+{
+  std::map<int,double>::iterator it;
+  double accum = 0.0;
+  for(it=dist.begin();it!=dist.end();++it)
+    {
+      if (it->second == std::numeric_limits<double>::infinity())
+	accum += 0;
+      else
+	accum += it->second;
+    }
+  return accum/static_cast<double>(dist.size()-1);
+  // Note: size-1 is required because the first distance is defined to be 0.
+  // From the lecture: The distance from Chicago to Chicago is 0. :)
+};
+
+// Monte Carlo simulation to obtain average path length.
+// Written as a helper function.
+double monte_carlo_graph_generator(const int& numnodes, const double& density, const int& iterations)
+{
+  graph* agraph;
+  std::map<int,double> dist;
+  std::map<int,double> prev;
+  double path_length_accumulator;
+  for(int i=0, path_legnth_accumulator=0.0;i<1000;++i)
+    {
+      agraph = new graph(50,0.2,1.0,10.0);
+      agraph->dijkstra(0,dist,prev); // Calculate distance from 0 to all nodes
+      path_length_accumulator += average_path_length(dist);
+    }
+  return path_length_accumulator/static_cast<double>(iterations);
+}
+
+void print_monte_carlo_path_length_simulation_results(const int& numnodes, const double& density, const int& iterations)
+{
+  double path_length_average_result;
+
+  path_length_average_result = monte_carlo_graph_generator(numnodes,density,iterations);
+  std::cout << "Average path length from Node 0 to "<< numnodes - 1 <<" other nodes, computed over"   <<std::endl
+	    << iterations <<" runs, with "<< numnodes<<" nodes, "<< density*100<<"% density, and "     <<std::endl
+	    << "randomly generated edge weights between 1.0 and 10.0: " << path_length_average_result <<std::endl;
+}
+
+// 
+int main(int argc, char * argv[])
+{
+  srand(time(0));
+  graph* agraph = new graph(argv[1]);
+  agraph->prim(0);
+  return 0;
+};
+
+
